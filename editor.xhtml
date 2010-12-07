@@ -1,0 +1,694 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+    "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en">
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+	<link rel="stylesheet" type="text/css" href="editor.css" />
+	
+	<title>OpenStreetMap Editor</title>
+
+<script src="http://openlayers.org/dev/OpenLayers.js"></script>
+<script>
+//<![CDATA[
+
+var map, layer;
+var debug = false;
+
+function init() {
+
+    map = new OpenLayers.Map('slippy');
+    layer = new OpenLayers.Layer.OSM( "Simple OSM Map");
+    map.addLayer(layer);
+	map.setCenter(new OpenLayers.LonLat(-0.07486581802368164, 51.5064186030132) // Center of the map
+         .transform(
+            new OpenLayers.Projection("EPSG:4326"), // transform from WGS 1984
+            new OpenLayers.Projection("EPSG:900913") // to Spherical Mercator Projection
+          ), 18 // Zoom level
+        );
+        
+    if(debug)
+		loadEditor();        
+}
+
+function loadEditor() {
+	var bounds = map.getExtent();
+	bounds.transform(	new OpenLayers.Projection("EPSG:900913"),
+            			new OpenLayers.Projection("EPSG:4326"));
+	$('slippy').parentNode.removeChild($('slippy'));
+	$('loadButton').parentNode.removeChild($('loadButton'));
+	$('info').innerHTML = 'Loading...';
+	
+	MapEditor.init($('svg'));
+
+	if(debug) {
+		url = 'map.osm';
+		bounds.top = 51.4503174;
+		bounds.left = 5.4666707;
+	} else {
+		var url = 'http://api.openstreetmap.org/api/0.6/map?bbox='+bounds.left+','+bounds.bottom+','+bounds.right+','+bounds.top;
+		var url = 'proxy.php?url=/api/0.6/map?bbox='+bounds.left+','+bounds.bottom+','+bounds.right+','+bounds.top;
+	}
+	
+
+	
+	MapEditor.loadMap(url);
+	var coords = Projection.ll2xy(bounds.top, bounds.left);
+	MapEditor.x = coords.x;
+	MapEditor.y = coords.y;
+	MapEditor.updateZoomPan();
+}
+
+function $(string) {
+	return document.getElementById(string);
+}
+
+function removeClassName(el,name)
+{
+	var i,curList,newList;
+	var className = el.getAttribute('class');
+	if(className==null) return;
+	newList = new Array();
+	curList = className.split(" ");
+
+	for(i=0;i<curList.length;i++)
+	   if(curList[i] != name)
+	      newList.push(curList[i]);
+
+	className=newList.join(" ");
+	el.setAttribute('class', className);
+}
+
+function addClassName(el,name)
+{
+	var className = el.getAttribute('class');
+	el.setAttribute('class', className + " " + name);
+}
+
+
+
+function cancelEvent(e)
+{
+  e = e ? e : window.event;
+  if(e.stopPropagation)
+    e.stopPropagation();
+  if(e.preventDefault)
+    e.preventDefault();
+  e.cancelBubble = true;
+  e.cancel = true;
+  e.returnValue = false;
+  return false;
+}
+
+//The entire world goes from (0, 0) to (MAP_SIZE, MAP_SIZE) in svg coordinates
+var MAP_SIZE = 1000000;
+
+var Projection=({
+	r_major:6378137.0,//Equatorial Radius, WGS84
+	r_minor:6356752.314245179,//defined as constant
+	f:298.257223563,//1/f=(a-b)/a , a=r_major, b=r_minor
+	deg2rad:function(d)
+	{
+		var r=d*(Math.PI/180.0);
+		return r;
+	},
+	rad2deg:function(r)
+	{
+		var d=r/(Math.PI/180.0);
+		return d;
+	},
+	ll2m:function(lat,lon) //lat lon to mercator
+	{
+		//lat, lon in rad
+		var x=this.r_major * this.deg2rad(lon);
+ 
+		if (lat > 89.5) lat = 89.5;
+		if (lat < -89.5) lat = -89.5;
+ 
+ 
+		var temp = this.r_minor / this.r_major;
+		var es = 1.0 - (temp * temp);
+		var eccent = Math.sqrt(es);
+ 
+		var phi = this.deg2rad(lat);
+ 
+		var sinphi = Math.sin(phi);
+ 
+		var con = eccent * sinphi;
+		var com = .5 * eccent;
+		var con2 = Math.pow((1.0-con)/(1.0+con), com);
+		var ts = Math.tan(.5 * (Math.PI*0.5 - phi))/con2;
+		var y = 0 - this.r_major * Math.log(ts);
+		var ret={'x':x,'y':y};
+		return ret;
+	},
+	m2ll:function(x,y) //mercator to lat lon
+	{
+		var lon=this.rad2deg((x/this.r_major));
+ 
+		var temp = this.r_minor / this.r_major;
+		var e = Math.sqrt(1.0 - (temp * temp));
+		var lat=this.rad2deg(this.pj_phi2( Math.exp( 0-(y/this.r_major)), e));
+ 
+		var ret={'lon':lon,'lat':lat};
+		return ret;
+	},
+	pj_phi2:function(ts, e) 
+	{
+		var N_ITER=15;
+		var HALFPI=Math.PI/2;
+ 
+ 
+		var TOL=f000000001;
+		var eccnth, Phi, con, dphi;
+		var i;
+		var eccnth = .5 * e;
+		Phi = HALFPI - 2. * Math.atan (ts);
+		i = N_ITER;
+		do 
+		{
+			con = e * Math.sin (Phi);
+			dphi = HALFPI - 2. * Math.atan (ts * Math.pow((1. - con) / (1. + con), eccnth)) - Phi;
+			Phi += dphi;
+ 
+		} 
+		while ( Math.abs(dphi)>TOL && --i);
+		return Phi;
+	},
+	ll2xy: function(lat, lon) {
+		var coords = Projection.ll2m(lat, lon);
+		coords.x = MAP_SIZE * ((coords.x + 20037508.342789244) / (2 * 20037508.342789244));
+		coords.y = MAP_SIZE * ((-coords.y + 20037508.342789244) / (2 * 20037508.342789244));
+		return coords;
+	},
+});
+
+// hopefully return the mouse coordinates inside parent element
+function getMouseCoords(e, parent) {
+	var x, y;
+	muna = parent;
+	
+	if (document.getBoxObjectFor) {
+		// sorry for the deprecated use here, but see below
+		var boxy = document.getBoxObjectFor(parent);
+		x = e.pageX - boxy.x;
+		y = e.pageY - boxy.y;
+	} else if (parent.getBoundingClientRect) {
+		// NOTE: buggy for FF 3.5: https://bugzilla.mozilla.org/show_bug.cgi?id=479058
+		/* I have also noticed that the returned coordinates may change unpredictably
+		after the DOM is modified by adding some children to the SVG element */
+		var lefttop = parent.getBoundingClientRect();
+		x = e.clientX - Math.floor(lefttop.left);
+		y = e.clientY - Math.floor(lefttop.top);
+	} else {
+		x = e.pageX - (parent.offsetLeft || 0);
+		y = e.pageY - (parent.offsetTop || 0);
+	}
+
+	return { x: x, y: y }
+}
+
+
+var MapElement = {
+	onmousedown: function(e) {
+		var map_object = e.target.map_object;
+
+		var div = $('info');
+		div.innerHTML = '<h2>Node '+map_object.id+'</h2>';
+		for(key in map_object.tags) {
+			var value = map_object.tags[key];
+			div.innerHTML += '<input type="text" value="'+key+'" class="key" /><input type="text" value="'+value+'" class="value"/><br />';
+		}
+		if(!map_object.selected && e.button == 0) {
+			if(!e.shiftKey && !e.ctrlKey)
+				MapEditor.deselectAll();
+				
+			MapEditor.addSelection(map_object);
+			
+			//When ways get selected all of it's node also get selected, even though it isn't rendered that way
+			if(map_object.nodes) {
+				for(var i = 0; i < map_object.nodes.length; i++) {
+					var node = map_object.nodes[i];
+					if(!node.selected) {
+						MapEditor.selectedObjects.push(node);
+					}
+				}
+			}
+		}
+		
+		//Start a drag operation for all selected objects
+		MapEditor.dragging = true;
+		var coords = getMouseCoords(e, MapEditor.svg);
+		coords = MapEditor.xy2f(coords.x, coords.y);
+		MapEditor.drag_x = coords.x;
+		MapEditor.drag_y = coords.y;
+		
+		//Remember for all objects where they started in the drag operation
+		for(var i = 0; i < MapEditor.selectedObjects.length; i++) {
+			var map_object = MapEditor.selectedObjects[i];
+			map_object.dragstart_x = map_object.x;
+			map_object.dragstart_y = map_object.y;
+		}
+	},
+	
+	onmouseup: function(e) {
+		var map_object = e.target.map_object;
+		
+		if(e.ctrlKey && map_object.selected) {
+			MapEditor.removeSelection(map_object);
+			
+		}
+	}
+}
+
+var Node = function() {
+	this.constructor.apply(this, arguments);
+}
+
+Node.prototype = {
+	id: undefined,
+	x: undefined,
+	y: undefined,
+	lat: undefined,
+	lon: undefined,
+	ways: undefined,
+	svg_element: undefined,
+	tags: undefined,
+	
+	constructor: function(node_element) {
+		//Extract coordinates
+		this.lat = node_element.getAttribute('lat');
+		this.lon = node_element.getAttribute('lon');
+		var coords = Projection.ll2xy(this.lat, this.lon);
+		this.x = coords.x;
+		this.y = coords.y;
+		
+		this.id = node_element.getAttribute('id');
+		
+		this.ways = new Object();
+		this.tags = new Object();
+		
+		for(var i = 0; i < node_element.childNodes.length; i++) {
+			var tag_element = node_element.childNodes[i];
+			if(tag_element.nodeName == 'tag') {
+				var key = tag_element.getAttribute('k');
+				var value = tag_element.getAttribute('v');
+				this.tags[key] = value;
+			}
+		}
+		
+		//Create the visual representation of this node
+		this.svg_element = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+		this.svg_element.setAttribute('r', '0.05px');
+		
+		this.svg_element.onmousedown = MapElement.onmousedown;
+		this.svg_element.onmouseup = MapElement.onmouseup;
+		this.svg_element.map_object = this;
+		this.setPosition(this.x, this.y);
+		
+				//Add classes to element
+		for(key in this.tags) {
+			var className = key.replace(/[^a-zA-Z0-9]/g, '-') + '-' + this.tags[key].replace(/[^a-zA-Z0-9]/g, '-');
+			addClassName(this.svg_element, className);
+		}
+	},
+
+	setPosition: function(x, y) {
+		this.x = x;
+		this.y = y;
+		this.svg_element.setAttribute('cx', x);
+		this.svg_element.setAttribute('cy', y);
+		
+		//Redraw all ways using this node
+		for(i in this.ways) {
+			var way = this.ways[i];
+			way.update();
+		}
+	}
+}
+
+var Way = function() {
+	this.constructor.apply(this, arguments);
+}
+
+Way.prototype = {
+	id: undefined,
+	nodes: undefined,
+	tags: undefined,
+	svg_element: undefined,
+	
+	constructor: function(way_element) {
+		this.nodes = new Array();
+		this.tags = new Object();
+		
+		this.id = way_element.getAttribute('id');
+		
+		
+		for(var i = 0; i < way_element.childNodes.length; i++) {
+			var waychild = way_element.childNodes[i];
+		
+			//Load the list of nodes	
+			if(waychild.nodeName == 'nd') {
+				
+				var ref = waychild.getAttribute('ref');
+				
+				//Cross reference the node and the way
+				this.nodes.push(MapEditor.nodes[ref]);
+				MapEditor.nodes[ref].ways[this.id] = this;
+			}
+			
+			//Load tags
+			if(waychild.nodeName == 'tag') {
+				var key = waychild.getAttribute('k');
+				var value = waychild.getAttribute('v');
+				this.tags[key] = value;
+			}
+		}
+		
+		
+		
+		//Create the visual representation of this node
+		this.svg_element = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+		this.svg_element.onmousedown = MapElement.onmousedown;
+		this.svg_element.onmouseup = MapElement.onmouseup;
+		this.svg_element.map_object = this;
+		
+		//Add classes to element
+		for(key in this.tags) {
+			var className = key.replace(/[^a-zA-Z0-9]/g, '-') + '-' + this.tags[key].replace(/[^a-zA-Z0-9]/g, '-');
+			addClassName(this.svg_element, className);
+		}
+	},
+	
+	/**
+	 * Recalculate the path this way takes across the map
+	 */
+	update: function() {
+		var letter = 'M';
+		var points = '';
+		var first = true;
+		for(id in this.nodes) {
+			var node = this.nodes[id];
+			if(!first)
+				points = points + ' ';
+			first = false;
+			points = points + letter + node.x + ' ' + node.y;
+			
+			letter = 'L';
+		}
+		this.svg_element.setAttribute('d', points);
+	}
+}
+
+
+
+var MapEditor = {
+	svg: undefined,
+	map: undefined,
+	
+	nodes: undefined,
+	ways: undefined,
+	
+	x: undefined,
+	y: undefined,
+	
+	selectedObjects: undefined,
+	
+	//Panning
+	panning: false,
+	pan_x: 0,
+	pan_y: 0,
+	
+	//Selecting
+	selecting: false,
+	select_x: 0,
+	select_y: 0,
+	
+	//Dragging
+	dragging: false,
+	drag_x: 0,
+	drag_y: 0,
+	
+	scale: 40,
+
+	/**
+	 * Initialize the map editor with a svg element
+	 */
+	init: function(svg) {
+		this.selectedObjects = new Array();
+		this.svg = svg;
+		
+		//Create a group wich will be used for zooming and panning the map named
+		this.map = $('map');
+		
+		this.nodes = new Object();
+		this.ways = new Object();
+		
+		this.updateZoomPan();
+
+		document.onmousemove = this.onmousemove;
+		document.onmousedown = this.onmousedown;
+		document.onmouseup = this.onmouseup;
+		$('background').onmousedown = this.background_onmousedown;
+		svg.oncontextmenu = function() { return false;};
+		
+		//Attach mousewheel event
+		var mousewheelevt=(/Firefox/i.test(navigator.userAgent))? "DOMMouseScroll" : "mousewheel"; 
+		if (svg.attachEvent)
+		    svg.attachEvent("on"+mousewheelevt, this.onmousewheel)
+		else if (document.addEventListener)
+		    svg.addEventListener(mousewheelevt, this.onmousewheel, false);
+	},
+	
+	xy2f: function(x, y) {
+		return {x: this.x + x / this.scale,
+				y: this.y + y / this.scale}
+	},
+
+	addSelection: function(map_object) {
+		if(map_object.selected)
+			return;
+			
+		map_object.selected = true;
+		addClassName(map_object.svg_element, 'selected');
+		this.selectedObjects.push(map_object);
+	},
+	
+	removeSelection: function(map_object) {
+		map_object.selected = false;
+		removeClassName(map_object.svg_element, 'selected');
+	},
+	
+	deselectAll: function() {
+		for(var i = 0; i < this.selectedObjects.length; i++) {
+			var map_object = this.selectedObjects[i];
+			map_object.selected = false;
+			removeClassName(map_object.svg_element, 'selected');
+		}
+		this.selectedObjects = new Array();
+	},
+	
+	updateZoomPan: function() {
+		this.map.setAttribute('transform', 'scale('+this.scale+') translate(-'+this.x+', -'+this.y+')');
+	},
+	
+	onmousedown: function(evt) {
+		if(evt.button == 2) {
+			var coords = getMouseCoords(evt, MapEditor.svg);
+			MapEditor.panning = true;
+			
+			MapEditor.pan_x = MapEditor.x + coords.x / MapEditor.scale;
+			MapEditor.pan_y = MapEditor.y + coords.y / MapEditor.scale;
+		}
+		cancelEvent(evt);
+		return false;
+	},
+	
+	onmousemove: function(evt) {
+		var coords = getMouseCoords(evt, MapEditor.svg);
+		
+		if(MapEditor.panning) {
+			MapEditor.x = MapEditor.pan_x - coords.x / MapEditor.scale;
+			MapEditor.y = MapEditor.pan_y - coords.y / MapEditor.scale;
+			MapEditor.updateZoomPan();
+		}
+		
+		//Update the dimensions of the rectangular area (selectbox) used for selecting multiple nodes
+		if(MapEditor.selectbox) {
+			var topleft = {	x: Math.min(coords.x, MapEditor.selectbox_x),
+							y: Math.min(coords.y, MapEditor.selectbox_y) };
+
+			var bottomright = {	x: Math.max(coords.x, MapEditor.selectbox_x),
+								y: Math.max(coords.y, MapEditor.selectbox_y) };
+			
+			var selectbox = $('selectbox');
+			
+			selectbox.setAttribute('x', topleft.x);
+			selectbox.setAttribute('y', topleft.y);
+			
+			selectbox.setAttribute('width', bottomright.x - topleft.x);
+			selectbox.setAttribute('height', bottomright.y - topleft.y);
+		}
+		
+		//Drag a selection of nodes across the map
+		if(MapEditor.dragging) {
+			var coords = MapEditor.xy2f(coords.x, coords.y);
+			var difference = {	x: coords.x - MapEditor.drag_x,
+								y: coords.y - MapEditor.drag_y};
+			for(var i = 0; i < MapEditor.selectedObjects.length; i++) {
+				var map_object = MapEditor.selectedObjects[i];
+				if(map_object.setPosition) {
+					map_object.setPosition(map_object.dragstart_x + difference.x,
+											map_object.dragstart_y + difference.y);
+				}
+			}			
+		}
+	},
+	
+	onmouseup: function(evt) {
+		MapEditor.panning = false;
+
+
+		if(evt.target == $('background') && evt.button == 0 && !evt.shiftKey && !MapEditor.selectbox && !MapEditor.dragging) {
+			MapEditor.deselectAll();
+		}
+				
+		if(MapEditor.selectbox) {
+			MapEditor.selectbox = false;
+			MapEditor.svg.removeChild($('selectbox'));
+			
+			var coords = getMouseCoords(evt, MapEditor.svg);
+			var topleft = MapEditor.xy2f(	Math.min(coords.x, MapEditor.selectbox_x),
+											Math.min(coords.y, MapEditor.selectbox_y));
+
+			var bottomright = MapEditor.xy2f(	Math.max(coords.x, MapEditor.selectbox_x),
+												Math.max(coords.y, MapEditor.selectbox_y));
+			
+	
+			if(!evt.shiftKey && !evt.ctrlKey) {
+				MapEditor.deselectAll();				
+			}
+	
+			for(nodeId in MapEditor.nodes) {
+				var node = MapEditor.nodes[nodeId];
+				if(topleft.x <= node.x && node.x <= bottomright.x
+					&& topleft.y <= node.y && node.y <= bottomright.y) {
+						
+					if(evt.ctrlKey) {
+						MapEditor.removeSelection(node);
+					} else {
+						MapEditor.addSelection(node);
+					}
+				}
+			}
+		}
+		
+		if(evt.button == 0) {
+			MapEditor.dragging = false;
+		}
+	},
+	
+	onmousewheel: function(evt) {
+		coords = getMouseCoords(evt, MapEditor.svg);
+		
+		var x = MapEditor.x + coords.x / MapEditor.scale;
+		var y = MapEditor.y + coords.y / MapEditor.scale;
+		
+		evt = evt ? evt : window.event;
+		var wheelData = evt.detail ? evt.detail * -1 : evt.wheelDelta / 40;
+		
+		var multiplier = (wheelData / 40);
+		
+		MapEditor.scale *= 1 + multiplier;
+		
+		MapEditor.x  = x - coords.x / MapEditor.scale
+		MapEditor.y  = y - coords.y / MapEditor.scale
+		
+		MapEditor.updateZoomPan();
+		
+		
+		evt.preventDefault();
+		return false;
+	},
+	
+	////////////////// SELECTING
+	
+	background_onmousedown: function(e) {
+		if(e.button == 0) {
+			var selectbox = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+			selectbox.setAttribute('id', 'selectbox');
+			MapEditor.svg.appendChild(selectbox);
+			
+			var coords = getMouseCoords(e, MapEditor.svg);
+			MapEditor.selectbox = true;
+			MapEditor.selectbox_x = coords.x;
+			MapEditor.selectbox_y = coords.y;
+		}
+	},
+
+	
+	loadMap: function(url) {
+		var client = new XMLHttpRequest();
+		client.open('GET', url);
+		client.send();
+
+		client.onreadystatechange = function() {
+
+			if(this.readyState == 4) {
+				osmdocument = this.responseXML.documentElement;
+				
+				var nodes = osmdocument.getElementsByTagName('node');
+				for(i = 0; i < nodes.length; i++) {
+					node_element = nodes.item(i);
+					
+					var node = new Node(node_element);
+					MapEditor.addNode(node);
+				}
+				
+				var ways = osmdocument.getElementsByTagName('way');
+				for(i = 0; i < ways.length; i++) {
+					var way_element = ways.item(i);
+
+					var id = way_element.getAttribute('id');						
+					var way = new Way(way_element);
+					MapEditor.addWay(way);
+				}
+				$('svg').style.display = 'block';
+				$('info').innerHTML = '';
+			}
+		}
+	},
+
+	addNode: function(node) {
+		this.nodes[node.id] = node;
+		this.map.appendChild(node.svg_element);
+	},
+	addWay: function(way) {
+		this.ways[way.id] = way;
+		
+		//Add way beneath the nodes
+		this.map.insertBefore(way.svg_element, this.map.childNodes[0]);
+		way.update();
+	}
+}
+
+
+//]]>
+</script>
+</head>
+
+<body onload="init()">
+<h1>OpenStreetMap Editor</h1>
+
+<div id="slippy" style="width: 600px; height: 400px; float: left;"></div><input type="button" id="loadButton" style="float: left;" value="Load Editor" onclick="loadEditor()"/>
+
+<svg id="svg" width="600" height="400" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" style="display: none; border: 1px solid black; float: left;">
+<rect id="background" width="600" height="400" style="fill:white;"/>
+<g id="map"></g>
+</svg>
+
+<div id="info" style="float: left;">
+</div>
+		
+</body>
+</html>
+
